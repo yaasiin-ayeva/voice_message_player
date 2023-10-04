@@ -315,6 +315,9 @@ class _VoiceMessageState extends State<VoiceMessage>
   void _setDuration() async {
     if (widget.duration != null) {
       _audioDuration = widget.duration;
+    }  if (widget.audioFile != null)  {
+      String path = (await widget.audioFile!).path;
+      _audioDuration = await jsAudio.AudioPlayer().setFilePath(path);
     } else {
       _audioDuration = await jsAudio.AudioPlayer().setUrl(widget.audioSrc!);
     }
