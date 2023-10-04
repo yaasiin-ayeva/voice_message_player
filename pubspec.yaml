@@ -4,15 +4,14 @@ version: 1.0.31
 homepage: https://github.com/mehranshoqi/voice_message_player
 
 environment:
-  sdk: ">=2.15.1 <3.0.0"
-  flutter: ">=1.17.0"
+  sdk: ">=3.0.2 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  audioplayers: ^3.0.1
-  just_audio: ^0.9.31
-  syncfusion_flutter_sliders: ^20.4.51
+  audioplayers: ^5.2.0
+  just_audio: ^0.9.35
+  syncfusion_flutter_sliders: ^23.1.39
 
 dev_dependencies:
   flutter_test:
