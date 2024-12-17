@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 // ignore: library_prefixes
 import 'package:just_audio/just_audio.dart' as jsAudio;
+import 'package:path_provider/path_provider.dart';
 import 'package:voice_message_package/src/contact_noises.dart';
 import 'package:voice_message_package/src/helpers/utils.dart';
 
@@ -40,6 +42,7 @@ class VoiceMessage extends StatefulWidget {
 
   final String? audioSrc;
   Future<File>? audioFile;
+  final bool cacheEnabled = false;
   final Duration? duration;
   final bool showDuration;
   final List<double>? waveForm;
@@ -299,8 +302,19 @@ class _VoiceMessageState extends State<VoiceMessage>
   void _startPlaying() async {
     if (widget.audioFile != null) {
       String path = (await widget.audioFile!).path;
-      debugPrint("> _startPlaying path $path");
-      await _player.play(DeviceFileSource(path));
+
+      if (widget.cacheEnabled == true) {
+        final dio = Dio();
+        final tempDir = await getTemporaryDirectory();
+        final tempPath = '${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.aac';
+
+        await dio.download(path, tempPath);
+
+        await _player.play(DeviceFileSource(tempPath));
+      } else {
+        debugPrint("> _startPlaying path $path");
+        await _player.play(DeviceFileSource(path));
+      }
     } else if (widget.audioSrc != null) {
       await _player.play(UrlSource(widget.audioSrc!));
     }
@@ -315,7 +329,8 @@ class _VoiceMessageState extends State<VoiceMessage>
   void _setDuration() async {
     if (widget.duration != null) {
       _audioDuration = widget.duration;
-    }  if (widget.audioFile != null)  {
+    }
+    if (widget.audioFile != null) {
       String path = (await widget.audioFile!).path;
       _audioDuration = await jsAudio.AudioPlayer().setFilePath(path);
     } else {
@@ -345,7 +360,7 @@ class _VoiceMessageState extends State<VoiceMessage>
   }
 
   void _setAnimationConfiguration(Duration audioDuration) async {
-    if(widget.formatDuration != null){
+    if (widget.formatDuration != null) {
       setState(() {
         _remainingTime = widget.formatDuration!(audioDuration);
       });
