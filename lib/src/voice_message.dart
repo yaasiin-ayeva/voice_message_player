@@ -301,25 +301,39 @@ class _VoiceMessageState extends State<VoiceMessage>
   //     );
 
   void _startPlaying() async {
-    if (widget.audioFile != null) {
-      String path = (await widget.audioFile!).path;
+    final String path = widget.audioSrc ?? (await widget.audioFile!).path;
 
-      if (widget.cacheEnabled == true) {
-        final dio = Dio();
-        final tempDir = await getTemporaryDirectory();
-        final tempPath = '${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.aac';
-
-        await dio.download(path, tempPath);
-
-        await _player.play(DeviceFileSource(tempPath));
-      } else {
-        debugPrint("> _startPlaying path $path");
-        await _player.play(DeviceFileSource(path));
+    if (widget.cacheEnabled == true) {
+      final String cachedPath = await _downloadAndCacheAudio(path);
+      await _playFromFile(cachedPath);
+    } else {
+      if (widget.audioFile != null) {
+        final String filePath = (await widget.audioFile!).path;
+        debugPrint("> _startPlaying filePath: $filePath");
+        await _playFromFile(filePath);
+      } else if (widget.audioSrc != null) {
+        await _playFromUrl(widget.audioSrc!);
       }
-    } else if (widget.audioSrc != null) {
-      await _player.play(UrlSource(widget.audioSrc!));
     }
-    _controller!.forward();
+
+    _controller?.forward();
+  }
+
+  Future<String> _downloadAndCacheAudio(String url) async {
+    final dio = Dio();
+    final tempDir = await getTemporaryDirectory();
+    final tempPath =
+        '${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.aac';
+    await dio.download(url, tempPath);
+    return tempPath;
+  }
+
+  Future<void> _playFromFile(String path) async {
+    await _player.play(DeviceFileSource(path));
+  }
+
+  Future<void> _playFromUrl(String url) async {
+    await _player.play(UrlSource(url));
   }
 
   _stopPlaying() async {
