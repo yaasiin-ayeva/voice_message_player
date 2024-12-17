@@ -38,11 +38,12 @@ class VoiceMessage extends StatefulWidget {
     this.meFgColor = const Color(0xffffffff),
     this.played = false,
     this.onPlay,
+    this.cacheEnabled = false,
   }) : super(key: key);
 
   final String? audioSrc;
   Future<File>? audioFile;
-  final bool cacheEnabled = false;
+  bool cacheEnabled;
   final Duration? duration;
   final bool showDuration;
   final List<double>? waveForm;
