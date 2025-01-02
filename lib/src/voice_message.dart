@@ -14,7 +14,6 @@ import './helpers/widgets.dart';
 import './noises.dart';
 import 'helpers/colors.dart';
 
-/// This is the main widget.
 // ignore: must_be_immutable
 class VoiceMessage extends StatefulWidget {
   VoiceMessage({
@@ -75,6 +74,8 @@ class _VoiceMessageState extends State<VoiceMessage>
   Duration? _audioDuration;
   double maxDurationForSlider = .0000001;
   bool _isPlaying = false, x2 = false, _audioConfigurationDone = false;
+  bool _isDownloading = false;
+  bool _isAudioAvailable = false;
   int duration = 00;
   String _remainingTime = '';
   AnimationController? _controller;
@@ -85,6 +86,7 @@ class _VoiceMessageState extends State<VoiceMessage>
       return duration.toString().substring(2, 11);
     };
 
+    _checkAudioAvailability();
     _setDuration();
     super.initState();
     stream = _player.onPlayerStateChanged.listen((event) {
@@ -115,8 +117,69 @@ class _VoiceMessageState extends State<VoiceMessage>
     );
   }
 
+  Future<void> _checkAudioAvailability() async {
+    try {
+      if (widget.audioFile != null) {
+        final file = await widget.audioFile!;
+        setState(() => _isAudioAvailable = file.existsSync());
+      } else if (widget.audioSrc != null) {
+        final response = await Dio().head(widget.audioSrc!);
+        setState(() => _isAudioAvailable = response.statusCode == 200);
+      }
+    } catch (_) {
+      setState(() => _isAudioAvailable = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => _sizerChild(context);
+
+  Widget _playOrDownloadButton(BuildContext context) {
+    if (_isAudioAvailable) {
+      return _playButton(context);
+    } else {
+      return _downloadButton(context);
+    }
+  }
+
+  Widget _downloadButton(BuildContext context) => InkWell(
+        onTap: _isDownloading
+            ? null
+            : () async {
+                setState(() => _isDownloading = true);
+                try {
+                  final path = await _downloadAndCacheAudio(widget.audioSrc!);
+                  setState(() {
+                    _isAudioAvailable = true;
+                    widget.audioFile = Future.value(File(path));
+                  });
+                } catch (_) {
+                  debugPrint("Error downloading audio");
+                } finally {
+                  setState(() => _isDownloading = false);
+                }
+              },
+        child: Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: widget.me ? widget.meFgColor : widget.contactPlayIconBgColor,
+          ),
+          width: 10.w(),
+          height: 10.w(),
+          child: _isDownloading
+              ? CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: widget.me ? widget.meFgColor : widget.contactFgColor,
+                )
+              : Icon(
+                  Icons.download,
+                  color: widget.me
+                      ? widget.mePlayIconColor
+                      : widget.contactPlayIconColor,
+                  size: 5.w(),
+                ),
+        ),
+      );
 
   Container _sizerChild(BuildContext context) => Container(
         padding: EdgeInsets.symmetric(horizontal: .8.w()),
@@ -139,7 +202,7 @@ class _VoiceMessageState extends State<VoiceMessage>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _playButton(context),
+              _playOrDownloadButton(context),
               SizedBox(width: 3.w()),
               _durationWithNoise(context),
               SizedBox(width: 2.2.w()),
