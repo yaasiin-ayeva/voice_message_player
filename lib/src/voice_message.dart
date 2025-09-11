@@ -68,10 +68,12 @@ class VoiceMessage extends StatefulWidget {
 
 class _VoiceMessageState extends State<VoiceMessage>
     with SingleTickerProviderStateMixin {
-  late StreamSubscription stream;
+  late StreamSubscription _playerStateSubscription;
+  late StreamSubscription _positionSubscription;
   final AudioPlayer _player = AudioPlayer();
   final double maxNoiseHeight = 6.w(), noiseWidth = 28.5.w();
   Duration? _audioDuration;
+  Duration _currentPosition = Duration.zero;
   double maxDurationForSlider = .0000001;
   bool _isPlaying = false, x2 = false, _audioConfigurationDone = false;
   bool _isDownloading = false;
@@ -82,16 +84,30 @@ class _VoiceMessageState extends State<VoiceMessage>
 
   @override
   void initState() {
+    super.initState();
+
+    // Default formatting to display mm:ss without milliseconds
     widget.formatDuration ??= (Duration duration) {
-      return duration.toString().substring(2, 11);
+      String twoDigits(int n) => n.toString().padLeft(2, '0');
+      String minutes = twoDigits(duration.inMinutes);
+      String seconds = twoDigits(duration.inSeconds.remainder(60));
+      return '$minutes:$seconds';
     };
 
     _checkAudioAvailability();
     _setDuration();
-    super.initState();
-    stream = _player.onPlayerStateChanged.listen((event) {
+    _setupPlayerListeners();
+  }
+
+  void _setupPlayerListeners() {
+    // Listen to player state changes
+    _playerStateSubscription = _player.onPlayerStateChanged.listen((event) {
       switch (event) {
         case PlayerState.stopped:
+          setState(() {
+            _isPlaying = false;
+            _currentPosition = Duration.zero;
+          });
           break;
         case PlayerState.playing:
           setState(() => _isPlaying = true);
@@ -100,34 +116,64 @@ class _VoiceMessageState extends State<VoiceMessage>
           setState(() => _isPlaying = false);
           break;
         case PlayerState.completed:
-          _player.seek(const Duration(milliseconds: 0));
-          setState(() {
-            duration = _audioDuration!.inMilliseconds;
-            _remainingTime = widget.formatDuration!(_audioDuration!);
-          });
+          _handlePlaybackComplete();
           break;
         default:
           break;
       }
     });
-    _player.onPositionChanged.listen(
-      (Duration p) => setState(
-        () => _remainingTime = p.toString().substring(2, 11),
-      ),
-    );
+
+    // Listen to position changes with throttling
+    _positionSubscription = _player.onPositionChanged.listen((position) {
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+          _remainingTime = widget.formatDuration!(position);
+
+          // Update animation only if it's configured
+          if (_audioConfigurationDone &&
+              _controller != null &&
+              _audioDuration != null) {
+            final progress =
+                position.inMilliseconds / _audioDuration!.inMilliseconds;
+            _controller!.value = (noiseWidth * progress).clamp(0.0, noiseWidth);
+          }
+        });
+      }
+    });
+  }
+
+  void _handlePlaybackComplete() {
+    if (mounted) {
+      setState(() {
+        _isPlaying = false;
+        _currentPosition = Duration.zero;
+        if (_audioDuration != null) {
+          _remainingTime = widget.formatDuration!(_audioDuration!);
+        }
+      });
+      _controller?.reset();
+      _player.seek(Duration.zero);
+    }
   }
 
   Future<void> _checkAudioAvailability() async {
     try {
       if (widget.audioFile != null) {
         final file = await widget.audioFile!;
-        setState(() => _isAudioAvailable = file.existsSync());
+        if (mounted) {
+          setState(() => _isAudioAvailable = file.existsSync());
+        }
       } else if (widget.audioSrc != null) {
         final response = await Dio().head(widget.audioSrc!);
-        setState(() => _isAudioAvailable = response.statusCode == 200);
+        if (mounted) {
+          setState(() => _isAudioAvailable = response.statusCode == 200);
+        }
       }
     } catch (_) {
-      setState(() => _isAudioAvailable = false);
+      if (mounted) {
+        setState(() => _isAudioAvailable = false);
+      }
     }
   }
 
@@ -149,14 +195,20 @@ class _VoiceMessageState extends State<VoiceMessage>
                 setState(() => _isDownloading = true);
                 try {
                   final path = await _downloadAndCacheAudio(widget.audioSrc!);
-                  setState(() {
-                    _isAudioAvailable = true;
-                    widget.audioFile = Future.value(File(path));
-                  });
-                } catch (_) {
-                  debugPrint("Error downloading audio");
+                  if (mounted) {
+                    setState(() {
+                      _isAudioAvailable = true;
+                      widget.audioFile = Future.value(File(path));
+                    });
+                    // Reconfigure duration with cached file
+                    _setDuration();
+                  }
+                } catch (e) {
+                  debugPrint("Error downloading audio: $e");
                 } finally {
-                  setState(() => _isDownloading = false);
+                  if (mounted) {
+                    setState(() => _isDownloading = false);
+                  }
                 }
               },
         child: Container(
@@ -206,9 +258,6 @@ class _VoiceMessageState extends State<VoiceMessage>
               SizedBox(width: 3.w()),
               _durationWithNoise(context),
               SizedBox(width: 2.2.w()),
-
-              /// x2 button will be added here.
-              // _speed(context),
             ],
           ),
         ),
@@ -260,11 +309,11 @@ class _VoiceMessageState extends State<VoiceMessage>
                     widget.me ? widget.meFgColor : widget.contactCircleColor),
 
               /// show duration
-              if (widget.showDuration)
+              if (widget.showDuration && _audioDuration != null)
                 Padding(
                   padding: EdgeInsets.only(left: 1.2.w()),
                   child: Text(
-                    widget.formatDuration!(widget.duration!),
+                    widget.formatDuration!(_audioDuration!),
                     style: TextStyle(
                       fontSize: 10,
                       color:
@@ -288,7 +337,7 @@ class _VoiceMessageState extends State<VoiceMessage>
         ],
       );
 
-  /// Noise widget of audio.
+  /// Audio waveform widget
   Widget _noise(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final newTHeme = theme.copyWith(
@@ -299,7 +348,6 @@ class _VoiceMessageState extends State<VoiceMessage>
       ),
     );
 
-    ///
     return Theme(
       data: newTHeme,
       child: SizedBox(
@@ -309,15 +357,14 @@ class _VoiceMessageState extends State<VoiceMessage>
           clipBehavior: Clip.hardEdge,
           children: [
             widget.me ? const Noises() : const ContactNoise(),
-            if (_audioConfigurationDone)
+            if (_audioConfigurationDone && _controller != null)
               AnimatedBuilder(
-                animation:
-                    CurvedAnimation(parent: _controller!, curve: Curves.ease),
+                animation: _controller!,
                 builder: (context, child) {
                   return Positioned(
-                    left: _controller!.value,
+                    left: 0,
                     child: Container(
-                      width: noiseWidth,
+                      width: _controller!.value,
                       height: 6.w(),
                       color: widget.me
                           ? widget.meBgColor.withOpacity(.4)
@@ -334,9 +381,12 @@ class _VoiceMessageState extends State<VoiceMessage>
                 child: Slider(
                   min: 0.0,
                   max: maxDurationForSlider,
-                  onChangeStart: (__) => _stopPlaying(),
-                  onChanged: (_) => _onChangeSlider(_),
-                  value: duration + .0,
+                  onChangeStart: (_) => _onSliderStart(),
+                  onChanged: (value) => _onChangeSlider(value),
+                  onChangeEnd: (_) => _onSliderEnd(),
+                  value: _currentPosition.inMilliseconds
+                      .toDouble()
+                      .clamp(0.0, maxDurationForSlider),
                 ),
               ),
             ),
@@ -346,49 +396,94 @@ class _VoiceMessageState extends State<VoiceMessage>
     );
   }
 
-  // _speed(BuildContext context) => InkWell(
-  //       onTap: () => _toggle2x(),
-  //       child: Container(
-  //         alignment: Alignment.center,
-  //         padding: EdgeInsets.symmetric(horizontal: 3.w, vertical: 1.6.w),
-  //         decoration: BoxDecoration(
-  //           borderRadius: BorderRadius.circular(2.8.w),
-  //           color: widget.meFgColor.withOpacity(.28),
-  //         ),
-  //         width: 9.8.w,
-  //         child: Text(
-  //           !x2 ? '1X' : '2X',
-  //           style: TextStyle(fontSize: 9.8, color: widget.meFgColor),
-  //         ),
-  //       ),
-  //     );
+  bool _wasPlayingBeforeSliderChange = false;
+
+  void _onSliderStart() {
+    _wasPlayingBeforeSliderChange = _isPlaying;
+    if (_isPlaying) {
+      _stopPlaying();
+    }
+  }
+
+  void _onSliderEnd() {
+    if (_wasPlayingBeforeSliderChange) {
+      _startPlaying();
+    }
+  }
 
   void _startPlaying() async {
-    final String path = widget.audioSrc ?? (await widget.audioFile!).path;
+    try {
+      if (widget.cacheEnabled && widget.audioSrc != null) {
+        // If cache is enabled and we have a URL, use cache
+        final String cachedPath =
+            await _downloadAndCacheAudio(widget.audioSrc!);
+        await _playFromFile(cachedPath);
+      } else {
+        // Otherwise, use standard method
+        if (widget.audioFile != null) {
+          final String filePath = (await widget.audioFile!).path;
+          debugPrint("> _startPlaying filePath: $filePath");
+          await _playFromFile(filePath);
+        } else if (widget.audioSrc != null) {
+          await _playFromUrl(widget.audioSrc!);
+        }
+      }
+    } catch (e) {
+      debugPrint("Error starting playback: $e");
+      setState(() => _isPlaying = false);
+    }
+  }
 
-    if (widget.cacheEnabled == true) {
-      final String cachedPath = await _downloadAndCacheAudio(path);
-      await _playFromFile(cachedPath);
-    } else {
-      if (widget.audioFile != null) {
-        final String filePath = (await widget.audioFile!).path;
-        debugPrint("> _startPlaying filePath: $filePath");
-        await _playFromFile(filePath);
-      } else if (widget.audioSrc != null) {
-        await _playFromUrl(widget.audioSrc!);
+  // Cache management
+  static final Map<String, String> _audioCache = {};
+
+  Future<String> _downloadAndCacheAudio(String url) async {
+    // Check if file is already cached
+    if (_audioCache.containsKey(url)) {
+      final cachedPath = _audioCache[url]!;
+      if (await File(cachedPath).exists()) {
+        debugPrint("Using cached audio: $cachedPath");
+        return cachedPath;
+      } else {
+        // Cached file no longer exists, remove from cache
+        _audioCache.remove(url);
       }
     }
 
-    _controller?.forward();
-  }
-
-  Future<String> _downloadAndCacheAudio(String url) async {
+    // Download and cache
+    debugPrint("Downloading and caching audio: $url");
     final dio = Dio();
     final tempDir = await getTemporaryDirectory();
-    final tempPath =
-        '${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.aac';
-    await dio.download(url, tempPath);
-    return tempPath;
+
+    // Create filename based on URL hash to avoid collisions
+    final urlHash = url.hashCode.abs().toString();
+    final extension = _getFileExtension(url);
+    final tempPath = '${tempDir.path}/cached_audio_$urlHash$extension';
+
+    try {
+      await dio.download(url, tempPath);
+      _audioCache[url] = tempPath;
+      debugPrint("Audio cached successfully: $tempPath");
+      return tempPath;
+    } catch (e) {
+      debugPrint("Error downloading audio for cache: $e");
+      // In case of error, try to play directly from URL
+      rethrow;
+    }
+  }
+
+  String _getFileExtension(String url) {
+    try {
+      final uri = Uri.parse(url);
+      final path = uri.path;
+      final lastDot = path.lastIndexOf('.');
+      if (lastDot != -1 && lastDot < path.length - 1) {
+        return path.substring(lastDot);
+      }
+    } catch (e) {
+      debugPrint("Error parsing URL for extension: $e");
+    }
+    return '.aac';
   }
 
   Future<void> _playFromFile(String path) async {
@@ -401,85 +496,103 @@ class _VoiceMessageState extends State<VoiceMessage>
 
   _stopPlaying() async {
     await _player.pause();
-    _controller!.stop();
   }
 
   void _setDuration() async {
-    if (widget.duration != null) {
-      _audioDuration = widget.duration;
-    }
-    if (widget.audioFile != null) {
-      String path = (await widget.audioFile!).path;
-      _audioDuration = await jsAudio.AudioPlayer().setFilePath(path);
-    } else {
-      _audioDuration = await jsAudio.AudioPlayer().setUrl(widget.audioSrc!);
-    }
-    duration = _audioDuration!.inMilliseconds;
-    maxDurationForSlider = duration + .0;
+    try {
+      Duration? detectedDuration;
 
-    ///
-    _controller = AnimationController(
-      vsync: this,
-      lowerBound: 0,
-      upperBound: noiseWidth,
-      duration: _audioDuration,
-    );
-
-    ///
-    _controller!.addListener(() {
-      if (_controller!.isCompleted) {
-        _controller!.reset();
-        _isPlaying = false;
-        x2 = false;
-        setState(() {});
+      // Priority to user-provided duration
+      if (widget.duration != null) {
+        detectedDuration = widget.duration;
+      } else {
+        // Detect audio file duration
+        final jsAudio.AudioPlayer tempPlayer = jsAudio.AudioPlayer();
+        try {
+          if (widget.audioFile != null) {
+            String path = (await widget.audioFile!).path;
+            detectedDuration = await tempPlayer.setFilePath(path);
+          } else if (widget.audioSrc != null) {
+            // If cache is enabled, use cached file for duration detection
+            if (widget.cacheEnabled) {
+              try {
+                final cachedPath =
+                    await _downloadAndCacheAudio(widget.audioSrc!);
+                detectedDuration = await tempPlayer.setFilePath(cachedPath);
+              } catch (e) {
+                debugPrint(
+                    "Error using cached file for duration detection, falling back to URL: $e");
+                detectedDuration = await tempPlayer.setUrl(widget.audioSrc!);
+              }
+            } else {
+              detectedDuration = await tempPlayer.setUrl(widget.audioSrc!);
+            }
+          }
+        } finally {
+          await tempPlayer.dispose();
+        }
       }
-    });
-    _setAnimationConfiguration(_audioDuration!);
-  }
 
-  void _setAnimationConfiguration(Duration audioDuration) async {
-    if (widget.formatDuration != null) {
-      setState(() {
-        _remainingTime = widget.formatDuration!(audioDuration);
-      });
+      if (detectedDuration != null && mounted) {
+        setState(() {
+          _audioDuration = detectedDuration;
+          duration = detectedDuration!.inMilliseconds;
+          maxDurationForSlider = duration.toDouble();
+          _remainingTime = widget.formatDuration!(detectedDuration);
+        });
+
+        _controller = AnimationController(
+          vsync: this,
+          duration: detectedDuration,
+        );
+
+        _completeAnimationConfiguration();
+      }
+    } catch (e) {
+      debugPrint("Error setting duration: $e");
+      if (mounted) {
+        _completeAnimationConfiguration();
+      }
     }
-    debugPrint("_setAnimationConfiguration $_remainingTime");
-    _completeAnimationConfiguration();
   }
 
-  void _completeAnimationConfiguration() =>
+  void _completeAnimationConfiguration() {
+    if (mounted) {
       setState(() => _audioConfigurationDone = true);
-
-  // void _toggle2x() {
-  //   x2 = !x2;
-  //   _controller!.duration = Duration(seconds: x2 ? duration ~/ 2 : duration);
-  //   if (_controller!.isAnimating) _controller!.forward();
-  //   _player.setPlaybackRate(x2 ? 2 : 1);
-  //   setState(() {});
-  // }
+    }
+  }
 
   void _changePlayingStatus() async {
     if (widget.onPlay != null) widget.onPlay!();
-    _isPlaying ? _stopPlaying() : _startPlaying();
-    setState(() => _isPlaying = !_isPlaying);
+
+    if (_isPlaying) {
+      await _stopPlaying();
+    } else {
+      _startPlaying();
+    }
   }
 
   @override
   void dispose() {
-    stream.cancel();
+    _playerStateSubscription.cancel();
+    _positionSubscription.cancel();
     _player.dispose();
     _controller?.dispose();
     super.dispose();
   }
 
-  ///
-  _onChangeSlider(double d) async {
-    if (_isPlaying) _changePlayingStatus();
-    duration = d.round();
-    _controller?.value = (noiseWidth) * duration / maxDurationForSlider;
-    _remainingTime = widget.formatDuration!(_audioDuration!);
-    await _player.seek(Duration(milliseconds: duration));
-    setState(() {});
+  void _onChangeSlider(double value) async {
+    if (_audioDuration == null) return;
+
+    final newPosition = Duration(milliseconds: value.round());
+    await _player.seek(newPosition);
+
+    if (mounted) {
+      setState(() {
+        _currentPosition = newPosition;
+        _remainingTime = widget.formatDuration!(newPosition);
+      });
+    }
   }
 }
 
